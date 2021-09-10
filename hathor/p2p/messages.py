@@ -104,7 +104,9 @@ class ProtocolMessages(Enum):
     BEST_BLOCK = 'BEST-BLOCK'  # Send the best block to your peer
 
     GET_BLOCK_TXS = 'GET-BLOCK-TXS'  # TODO: rename, maybe GET-TX-RANGE or repurpose GET-TRANSACTIONS above
+    GET_TRANSACTIONS_BFS = 'GET-TRANSACTIONS-BFS'
     TRANSACTION = 'TRANSACTION'
+    TRANSACTIONS_END = 'TRANSACTIONS-END'
 
     GET_MEMPOOL = 'GET-MEMPOOL'  # TODO: rename, maybe GET-TX-RANGE or repurpose GET-TRANSACTIONS above
     MEMPOOL_END = 'MEMPOOL-END'  # End of mempool sync

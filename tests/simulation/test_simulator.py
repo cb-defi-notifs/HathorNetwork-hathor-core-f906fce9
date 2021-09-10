@@ -132,7 +132,8 @@ class BaseRandomSimulatorTestCase(SimulatorTestCase):
         for miner in miners:
             miner.stop()
 
-        self.simulator.run_until_complete(600)
+        self.simulator.run(1200)
+        self.simulator.run_until_complete(1200)
 
         for idx, node in enumerate(nodes):
             self.log.debug(f'checking node {idx}')

@@ -51,6 +51,7 @@ from hathor.transaction import BaseTransaction, Block, MergeMinedBlock, Transact
 from hathor.transaction.exceptions import TxValidationError
 from hathor.transaction.storage import TransactionStorage
 from hathor.transaction.storage.exceptions import TransactionDoesNotExist
+from hathor.transaction.storage.tx_allow_scope import TxAllowScope
 from hathor.types import Address, VertexId
 from hathor.util import EnvironmentInfo, LogDuration, Random, Reactor, calculate_min_significant_weight, not_none
 from hathor.wallet import BaseWallet
@@ -264,6 +265,8 @@ class HathorManager:
 
         # Disable get transaction lock when initializing components
         self.tx_storage.disable_lock()
+        # Open scope for initialization.
+        self.tx_storage.set_allow_scope(TxAllowScope.VALID | TxAllowScope.PARTIAL | TxAllowScope.INVALID)
         # Initialize manager's components.
         if self._full_verification:
             self.tx_storage.reset_indexes()
@@ -274,6 +277,7 @@ class HathorManager:
             self.tx_storage.finish_full_verification()
         else:
             self._initialize_components_new()
+        self.tx_storage.set_allow_scope(TxAllowScope.VALID)
         self.tx_storage.enable_lock()
 
         # Metric starts to capture data
@@ -394,14 +398,11 @@ class HathorManager:
 
         # self.start_profiler()
         self.log.debug('reset all metadata')
-        with self.tx_storage.allow_partially_validated_context():
-            for tx in self.tx_storage.get_all_transactions():
-                tx.reset_metadata()
+        for tx in self.tx_storage.get_all_transactions():
+            tx.reset_metadata()
 
         self.log.debug('load blocks and transactions')
         for tx in self.tx_storage._topological_sort_dfs():
-            tx.update_initial_metadata()
-
             assert tx.hash is not None
 
             tx_meta = tx.get_metadata()
@@ -430,10 +431,18 @@ class HathorManager:
 
             try:
                 # TODO: deal with invalid tx
+                tx.calculate_height()
+                tx._update_parents_children_metadata()
+
                 if tx.can_validate_full():
-                    self.tx_storage.add_to_indexes(tx)
+                    tx.update_initial_metadata()
+                    tx.calculate_min_height()
+                    if tx.is_genesis:
+                        assert tx.validate_checkpoint(self.checkpoints)
                     assert tx.validate_full(skip_block_weight_verification=skip_block_weight_verification)
-                    self.consensus_algorithm.update(tx)
+                    self.tx_storage.add_to_indexes(tx)
+                    with self.tx_storage.allow_only_valid_context():
+                        self.consensus_algorithm.update(tx)
                     self.tx_storage.indexes.update(tx)
                     if self.tx_storage.indexes.mempool_tips is not None:
                         self.tx_storage.indexes.mempool_tips.update(tx)  # XXX: move to indexes.update
@@ -442,8 +451,7 @@ class HathorManager:
                     self.tx_storage.save_transaction(tx, only_metadata=True)
                 else:
                     assert tx.validate_basic(skip_block_weight_verification=skip_block_weight_verification)
-                    with self.tx_storage.allow_partially_validated_context():
-                        self.tx_storage.save_transaction(tx, only_metadata=True)
+                    self.tx_storage.save_transaction(tx, only_metadata=True)
             except (InvalidNewTransaction, TxValidationError):
                 self.log.error('unexpected error when initializing', tx=tx, exc_info=True)
                 raise
@@ -477,6 +485,8 @@ class HathorManager:
 
         # we have to have a best_block by now
         # assert best_block is not None
+
+        self.tx_storage.indexes._manually_initialize(self.tx_storage)
 
         self.log.debug('done loading transactions')
 
@@ -654,10 +664,11 @@ class HathorManager:
             for tx_hash in self.tx_storage.indexes.deps.iter():
                 if not self.tx_storage.transaction_exists(tx_hash):
                     continue
-                tx = self.tx_storage.get_transaction(tx_hash)
+                with self.tx_storage.allow_partially_validated_context():
+                    tx = self.tx_storage.get_transaction(tx_hash)
                 if tx.get_metadata().validation.is_final():
                     depended_final_txs.append(tx)
-            self.sync_v2_step_validations(depended_final_txs, quiet=False)
+            self.sync_v2_step_validations(depended_final_txs, quiet=True)
             self.log.debug('pending validations finished')
 
     def add_listen_address(self, addr: str) -> None:
@@ -1028,24 +1039,26 @@ class HathorManager:
         for ready_tx in txs:
             assert ready_tx.hash is not None
             self.tx_storage.indexes.deps.remove_ready_for_validation(ready_tx.hash)
-        it_next_ready = self.tx_storage.indexes.deps.next_ready_for_validation(self.tx_storage)
-        for tx in map(self.tx_storage.get_transaction, it_next_ready):
-            assert tx.hash is not None
-            tx.update_initial_metadata()
-            try:
-                # XXX: `reject_locked_reward` might not apply, partial validation is only used on sync-v2
-                # TODO: deal with `reject_locked_reward` on sync-v2
-                assert tx.validate_full(reject_locked_reward=True)
-            except (AssertionError, HathorError):
-                # TODO
-                raise
-            else:
-                self.tx_storage.add_to_indexes(tx)
-                self.consensus_algorithm.update(tx)
-                self.tx_storage.indexes.update(tx)
-                if self.tx_storage.indexes.mempool_tips:
-                    self.tx_storage.indexes.mempool_tips.update(tx)  # XXX: move to indexes.update
-                self.tx_fully_validated(tx, quiet=quiet)
+        with self.tx_storage.allow_partially_validated_context():
+            for tx in map(self.tx_storage.get_transaction,
+                          self.tx_storage.indexes.deps.next_ready_for_validation(self.tx_storage)):
+                assert tx.hash is not None
+                tx.update_initial_metadata()
+                with self.tx_storage.allow_only_valid_context():
+                    try:
+                        # XXX: `reject_locked_reward` might not apply, partial validation is only used on sync-v2
+                        # TODO: deal with `reject_locked_reward` on sync-v2
+                        assert tx.validate_full(reject_locked_reward=False)
+                    except (AssertionError, HathorError):
+                        # TODO
+                        raise
+                    else:
+                        self.tx_storage.add_to_indexes(tx)
+                        self.consensus_algorithm.update(tx)
+                        self.tx_storage.indexes.update(tx)
+                        if self.tx_storage.indexes.mempool_tips:
+                            self.tx_storage.indexes.mempool_tips.update(tx)  # XXX: move to indexes.update
+                        self.tx_fully_validated(tx, quiet=quiet)
 
     def tx_fully_validated(self, tx: BaseTransaction, *, quiet: bool) -> None:
         """ Handle operations that need to happen once the tx becomes fully validated.

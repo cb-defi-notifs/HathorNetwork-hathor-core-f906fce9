@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from hathor.simulator.miner import AbstractMiner
@@ -71,3 +71,12 @@ class StopAfterNTransactions(Trigger):
     def should_stop(self) -> bool:
         diff = self.tx_generator.transactions_found - self.initial_counter
         return diff >= self.quantity
+
+
+class StopWhenTrue(Trigger):
+    """Stop the simulation when a function returns true."""
+    def __init__(self, fn: Callable[[], bool]) -> None:
+        self.fn = fn
+
+    def should_stop(self) -> bool:
+        return self.fn()
