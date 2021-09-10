@@ -534,6 +534,7 @@ class BaseTransaction(ABC):
         from hathor.transaction.transaction_metadata import ValidationState
 
         meta = self.get_metadata()
+
         # skip full validation when it is a checkpoint
         if meta.validation.is_checkpoint():
             self.set_validation(ValidationState.CHECKPOINT_FULL)
@@ -870,12 +871,8 @@ class BaseTransaction(ABC):
             metadata = self.storage.get_metadata(self.hash)
             self._metadata = metadata
         if not metadata:
-            # FIXME: there is code that set use_storage=False but relies on correct height being calculated
-            #        which requires the use of a storage, this is a workaround that should be fixed, places where this
-            #        happens include generating new mining blocks and some tests
-            height = self.calculate_height() if self.storage else 0
             score = self.weight if self.is_genesis else 0
-            metadata = TransactionMetadata(hash=self.hash, accumulated_weight=self.weight, height=height, score=score,
+            metadata = TransactionMetadata(hash=self.hash, accumulated_weight=self.weight, height=0, score=score,
                                            min_height=0)
             self._metadata = metadata
         if not metadata.hash:

@@ -48,6 +48,10 @@ class SyncV1RandomSimulatorTestCase(unittest.SyncV1Params, BaseRandomSimulatorTe
 class SyncV2RandomSimulatorTestCase(unittest.SyncV2Params, BaseRandomSimulatorTestCase):
     __test__ = True
 
+    # XXX: disable because sync-v2 does not have send_tips
+    def test_sync_rate_limiter(self):
+        pass
+
 
 # sync-bridge should behave like sync-v2
 class SyncBridgeRandomSimulatorTestCase(unittest.SyncBridgeParams, SyncV2RandomSimulatorTestCase):
