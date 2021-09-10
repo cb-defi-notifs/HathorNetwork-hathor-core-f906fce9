@@ -147,6 +147,14 @@ class SyncV1RandomSimulatorTestCase(unittest.SyncV1Params, BaseRandomSimulatorTe
 class SyncV2RandomSimulatorTestCase(unittest.SyncV2Params, BaseRandomSimulatorTestCase):
     __test__ = True
 
+    @pytest.mark.flaky(max_runs=5, min_passes=1)
+    def test_two_nodes(self):
+        super().test_two_nodes()
+
+    @pytest.mark.flaky(max_runs=5, min_passes=1)
+    def test_many_miners_since_beginning(self):
+        super().test_many_miners_since_beginning()
+
 
 # sync-bridge should behave like sync-v2
 class SyncBridgeRandomSimulatorTestCase(unittest.SyncBridgeParams, SyncV2RandomSimulatorTestCase):

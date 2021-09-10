@@ -267,16 +267,18 @@ class Block(BaseTransaction):
     def verify_checkpoint(self, checkpoints: List[Checkpoint]) -> None:
         assert self.hash is not None
         assert self.storage is not None
-        meta = self.get_metadata()
-        # XXX: it's fine to use `in` with NamedTuples
-        if Checkpoint(meta.height, self.hash) in checkpoints:
-            return
-        # otherwise at least one child must be checkpoint validated
-        for child_tx in map(self.storage.get_transaction, meta.children):
-            if child_tx.get_metadata().validation.is_checkpoint():
-                return
-        raise CheckpointError(f'Invalid new block {self.hash_hex}: expected to reach a checkpoint but none of '
-                              'its children is checkpoint-valid and its hash does not match any checkpoint')
+        height = self.get_height()  # TODO: use "soft height" when sync-checkpoint is added
+        # find checkpoint with our height:
+        checkpoint: Optional[Checkpoint] = None
+        for cp in checkpoints:
+            if cp.height == height:
+                checkpoint = cp
+                break
+        if checkpoint is not None and checkpoint.hash != self.hash:
+            raise CheckpointError(f'Invalid new block {self.hash_hex}: checkpoint hash does not match')
+        else:
+            # TODO: check whether self is a parent of any checkpoint-valid block, this is left for a future PR
+            pass
 
     def verify_weight(self) -> None:
         """Validate minimum block difficulty."""

@@ -68,6 +68,7 @@ class BlockTemplate(NamedTuple):
         if include_metadata:
             block._metadata = TransactionMetadata(height=self.height, score=self.score)
         block.get_metadata(use_storage=False)
+        block._update_height_metadata()
         return block
 
     def get_random_parents(self, rng: Random) -> Tuple[bytes, bytes, bytes]:
