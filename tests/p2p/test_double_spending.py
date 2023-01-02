@@ -84,8 +84,9 @@ class BaseHathorSyncMethodsTestCase(unittest.TestCase):
             self.assertEqual([tx1.hash, tx2.hash], spent_meta.spent_outputs[txin.index])
 
         # old indexes
-        self.assertNotIn(tx1.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
-        self.assertNotIn(tx2.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
+        if self.manager1.tx_storage.indexes.tx_tips is not None:
+            self.assertNotIn(tx1.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
+            self.assertNotIn(tx2.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
 
         # new indexes
         if self.manager1.tx_storage.indexes.mempool_tips is not None:
@@ -114,9 +115,10 @@ class BaseHathorSyncMethodsTestCase(unittest.TestCase):
             self.assertEqual([tx1.hash, tx2.hash, tx3.hash], spent_meta.spent_outputs[txin.index])
 
         # old indexes
-        self.assertNotIn(tx1.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
-        self.assertNotIn(tx2.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
-        self.assertIn(tx3.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
+        if self.manager1.tx_storage.indexes.tx_tips is not None:
+            self.assertNotIn(tx1.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
+            self.assertNotIn(tx2.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
+            self.assertIn(tx3.hash, [x.data for x in self.manager1.tx_storage.get_tx_tips()])
 
         # new indexes
         if self.manager1.tx_storage.indexes.mempool_tips is not None:

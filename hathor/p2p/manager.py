@@ -191,9 +191,12 @@ class ConnectionsManager:
     def set_manager(self, manager: 'HathorManager') -> None:
         """Set the manager. This method must be called before start()."""
         self.manager = manager
+        assert self.manager.tx_storage.indexes is not None
+        indexes = self.manager.tx_storage.indexes
+        if self.enable_sync_v1 or self.enable_sync_v1_1:
+            self.log.debug('enable sync-v1 indexes')
+            indexes.enable_tips_indexes()
         if self.enable_sync_v2:
-            assert self.manager.tx_storage.indexes is not None
-            indexes = self.manager.tx_storage.indexes
             self.log.debug('enable sync-v2 indexes')
             indexes.enable_deps_index()
             indexes.enable_mempool_index()
