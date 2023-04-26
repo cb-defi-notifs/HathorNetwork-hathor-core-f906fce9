@@ -34,8 +34,8 @@ class TransactionMetadata:
     received_by: list[int]
     children: list[bytes]
     twins: list[bytes]
-    accumulated_weight: float
-    score: float
+    accumulated_weight: int
+    score: int
     first_block: Optional[bytes]
     height: Optional[int]
     validation: ValidationState
@@ -60,8 +60,8 @@ class TransactionMetadata:
         self,
         spent_outputs: Optional[dict[int, list[bytes]]] = None,
         hash: Optional[bytes] = None,
-        accumulated_weight: float = 0,
-        score: float = 0,
+        accumulated_weight: int = 0,
+        score: int = 0,
         height: Optional[int] = None,
         min_height: int = 0,
         feature_activation_bit_counts: Optional[list[int]] = None
