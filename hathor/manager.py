@@ -47,7 +47,7 @@ from hathor.p2p.protocol import HathorProtocol
 from hathor.profiler import get_cpu_profiler
 from hathor.pubsub import HathorEvents, PubSubManager
 from hathor.stratum import StratumFactory
-from hathor.transaction import BaseTransaction, Block, MergeMinedBlock, Transaction, TxVersion, sum_weights
+from hathor.transaction import BaseTransaction, Block, MergeMinedBlock, Transaction, TxVersion
 from hathor.transaction.exceptions import TxValidationError
 from hathor.transaction.storage import TransactionStorage
 from hathor.transaction.storage.exceptions import TransactionDoesNotExist
@@ -847,6 +847,7 @@ class HathorManager:
         assert 1 <= len(parents) <= 3, 'Impossible number of parents'
         if __debug__ and len(parents) == 3:
             assert len(parents_any) == 0, 'Extra parents to choose from that cannot be chosen'
+        score = parent_block_metadata.score + int(2**weight)
         return BlockTemplate(
             versions={TxVersion.REGULAR_BLOCK.value, TxVersion.MERGE_MINED_BLOCK.value},
             reward=daa.get_tokens_issued_per_block(height),
@@ -857,7 +858,7 @@ class HathorManager:
             parents=parents,
             parents_any=parents_any,
             height=height,
-            score=sum_weights(parent_block_metadata.score, weight),
+            score=score,
         )
 
     def generate_mining_block(self, timestamp: Optional[int] = None,

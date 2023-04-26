@@ -33,7 +33,7 @@ class BlockTemplate(NamedTuple):
     parents: List[bytes]  # required parents, will always have a block and at most 2 txs
     parents_any: List[bytes]  # list of extra parents to choose from when there are more options
     height: int  # metadata
-    score: float  # metadata
+    score: int  # metadata
 
     def generate_minimaly_valid_block(self) -> BaseTransaction:
         """ Generates a block, without any extra information that is valid for this template. No random choices."""

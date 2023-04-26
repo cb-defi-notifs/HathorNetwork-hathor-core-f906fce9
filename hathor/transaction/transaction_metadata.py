@@ -34,8 +34,8 @@ class TransactionMetadata:
     received_by: List[int]
     children: List[bytes]
     twins: List[bytes]
-    accumulated_weight: float
-    score: float
+    accumulated_weight: int
+    score: int
     first_block: Optional[bytes]
     height: int
     validation: ValidationState
@@ -52,7 +52,7 @@ class TransactionMetadata:
     _last_spent_by_hash: Optional[int]
 
     def __init__(self, spent_outputs: Optional[Dict[int, List[bytes]]] = None, hash: Optional[bytes] = None,
-                 accumulated_weight: float = 0, score: float = 0, height: int = 0, min_height: int = 0) -> None:
+                 accumulated_weight: int = 0, score: int = 0, height: int = 0, min_height: int = 0) -> None:
         from hathor.transaction.genesis import is_genesis
 
         # Hash of the transaction.

@@ -100,7 +100,7 @@ def test_send_event_response():
                        b'"version":1,"weight":10.0,"inputs":[],"outputs":[],"parents":[],"tokens":[],' \
                        b'"token_name":null,"token_symbol":null,"metadata":{"hash":"abc","spent_outputs":[],' \
                        b'"conflict_with":[],"voided_by":[],"received_by":[],"children":[],"twins":[],' \
-                       b'"accumulated_weight":10.0,"score":20.0,"first_block":null,"height":100,' \
+                       b'"accumulated_weight":1024,"score":1048576,"first_block":null,"height":100,' \
                        b'"validation":"validation"},"aux_pow":null},"group_id":null},"latest_event_id":10}'
 
     protocol.sendMessage.assert_called_once_with(expected_payload)

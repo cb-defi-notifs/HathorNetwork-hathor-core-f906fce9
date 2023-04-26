@@ -437,7 +437,7 @@ class BaseIndexesTest(unittest.TestCase):
                                                     address=decode_address(address))
         block2.parents[1:] = [txA2.hash, txB2.hash]
         block2.timestamp = block1.timestamp
-        block2.weight = 1.2
+        block2.weight = 4
         block2.resolve()
         block2.validate_full()
         self.manager.propagate_tx(block2, fails_silently=False)
