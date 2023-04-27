@@ -34,7 +34,12 @@ from hathor.transaction.storage.exceptions import (
     TransactionIsNotABlock,
     TransactionNotInAllowedScopeError,
 )
-from hathor.transaction.storage.migrations import BaseMigration, MigrationState, add_min_height_metadata, change_score_acc_weight_metadata,
+from hathor.transaction.storage.migrations import (
+    BaseMigration,
+    MigrationState,
+    add_min_height_metadata,
+    change_score_acc_weight_metadata,
+)
 from hathor.transaction.storage.tx_allow_scope import TxAllowScope, tx_allow_context
 from hathor.transaction.transaction import Transaction
 from hathor.transaction.transaction_metadata import TransactionMetadata

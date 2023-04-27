@@ -159,10 +159,10 @@ class BlockConsensusAlgorithm:
                       is_connected_to_the_best_chain=is_connected_to_the_best_chain)
 
             # First, void this block.
+            # We need to void this block first, because otherwise it would always be one of the heads.
             self.mark_as_voided(block, skip_remove_first_block_markers=True)
 
             # Get the score of the best chains.
-            # We need to void this block first, because otherwise it would always be one of the heads.
             heads = [cast(Block, storage.get_transaction(h)) for h in storage.get_best_block_tips()]
             best_score = None
             for head in heads:
@@ -173,6 +173,7 @@ class BlockConsensusAlgorithm:
                     # All heads must have the same score.
                     assert best_score == head_meta.score
             assert isinstance(best_score, int)
+            assert best_score > 0
 
             # Calculate the score.
             # We cannot calculate score before getting the heads.
@@ -308,7 +309,7 @@ class BlockConsensusAlgorithm:
             first_block = self._find_first_parent_in_best_chain(best_heads[0])
             self.add_voided_by_to_multiple_chains(best_heads[0], [block], first_block)
             if len(best_heads) == 1:
-                # assert best_heads[0].hash != block.hash
+                assert best_heads[0].hash != block.hash
                 self.update_score_and_mark_as_the_best_chain_if_possible(best_heads[0])
 
     def update_score_and_mark_as_the_best_chain(self, block: Block) -> None:
@@ -522,7 +523,7 @@ class BlockConsensusAlgorithm:
                 meta = block.get_metadata()
                 meta.score = int(2**block.weight)
                 self.context.save(block)
-            return block.weight
+            return int(2**block.weight)
 
         parent = self._find_first_parent_in_best_chain(block)
         newest_timestamp = parent.timestamp

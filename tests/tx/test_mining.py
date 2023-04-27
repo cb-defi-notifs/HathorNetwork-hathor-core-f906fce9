@@ -1,6 +1,5 @@
 from hathor.conf import HathorSettings
 from hathor.mining import BlockTemplate
-from hathor.transaction import sum_weights
 from hathor.transaction.storage import TransactionMemoryStorage
 from tests import unittest
 from tests.utils import add_new_blocks
@@ -38,7 +37,7 @@ class BaseMiningTest(unittest.TestCase):
         self.assertEqual(block_templates[0], BlockTemplate(
             versions={0, 3},
             reward=settings.INITIAL_TOKEN_UNITS_PER_BLOCK * 100,
-            weight=1.0,
+            weight=1,
             timestamp_now=int(manager.reactor.seconds()),
             timestamp_min=settings.GENESIS_TIMESTAMP + 3,
             timestamp_max=0xffffffff,  # no limit for next block after genesis
@@ -46,7 +45,7 @@ class BaseMiningTest(unittest.TestCase):
             parents=block_templates[0].parents,
             parents_any=[],
             height=1,  # genesis is 0
-            score=sum_weights(self.genesis_blocks[0].weight, 1.0),
+            score=int(2**self.genesis_blocks[0].weight) + int(2**1),
         ))
 
     def test_regular_block_template(self):
@@ -60,7 +59,7 @@ class BaseMiningTest(unittest.TestCase):
         self.assertEqual(block_templates[0], BlockTemplate(
             versions={0, 3},
             reward=settings.INITIAL_TOKEN_UNITS_PER_BLOCK * 100,
-            weight=1.0,
+            weight=1,
             timestamp_now=int(manager.reactor.seconds()),
             timestamp_min=blocks[-1].timestamp + 1,
             timestamp_max=blocks[-1].timestamp + settings.MAX_DISTANCE_BETWEEN_BLOCKS - 1,
@@ -68,7 +67,7 @@ class BaseMiningTest(unittest.TestCase):
             parents=block_templates[0].parents,
             parents_any=[],
             height=101,  # genesis is 0
-            score=sum_weights(blocks[-1].get_metadata().score, 1.0),
+            score=blocks[-1].get_metadata().score + int(2**1),
         ))
 
         self.assertConsensusValid(manager)
