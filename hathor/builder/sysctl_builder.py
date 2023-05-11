@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from hathor.builder import BuildArtifacts
-from hathor.sysctl import ConnectionsManagerSysctl, Sysctl
+from hathor.sysctl import ConnectionsManagerSysctl, HathorManagerSysctl, Sysctl
 
 
 class SysctlBuilder:
@@ -25,4 +25,5 @@ class SysctlBuilder:
         """Build the sysctl tree."""
         root = Sysctl()
         root.put_child('p2p', ConnectionsManagerSysctl(self.artifacts.p2p_manager))
+        root.put_child('core', HathorManagerSysctl(self.artifacts.manager))
         return root
