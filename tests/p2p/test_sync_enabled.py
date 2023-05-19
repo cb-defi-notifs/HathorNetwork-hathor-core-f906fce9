@@ -52,13 +52,20 @@ class BaseRandomSimulatorTestCase(SimulatorTestCase):
 
         self.simulator.run(600)
 
+        ready = set(conn for conn in connections if conn.proto1.is_state(conn.proto1.PeerState.READY))
+        self.assertTrue(len(ready), len(other_managers))
+
         enabled = set(conn for conn in connections if conn.proto1.is_sync_enabled())
         self.assertTrue(len(enabled), 3)
 
         manager1.connections._sync_rotate_if_needed(force=True)
         enabled2 = set(conn for conn in connections if conn.proto1.is_sync_enabled())
         self.assertTrue(len(enabled2), 3)
-        # Chance of false positive: 1/comb(20, 3) = 0.0008771929824561404
+        if enabled == enabled2:
+            manager1.connections._sync_rotate_if_needed(force=True)
+            enabled2 = set(conn for conn in connections if conn.proto1.is_sync_enabled())
+            self.assertTrue(len(enabled2), 3)
+        # Chance of false positive: (1/comb(15, 3))**2 = 0.00000483
         self.assertNotEqual(enabled, enabled2)
 
 

@@ -9,7 +9,7 @@ tests_cli = tests/cli/
 tests_lib = $(filter-out ${tests_cli} tests/__pycache__/, $(dir $(wildcard tests/*/.)))
 tests_ci = extras/github/
 
-pytest_flags = -p no:warnings --cov-report=term --cov-report=html --cov-report=xml --cov=hathor
+pytest_flags = -v -p no:warnings --cov-report=term --cov-report=html --cov-report=xml --cov=hathor
 
 #--strict-equality
 #--check-untyped-defs
