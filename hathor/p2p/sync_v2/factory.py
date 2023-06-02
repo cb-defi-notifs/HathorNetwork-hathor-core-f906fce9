@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Optional
 from hathor.p2p.manager import ConnectionsManager
 from hathor.p2p.sync_factory import SyncManagerFactory
 from hathor.p2p.sync_manager import SyncManager
+from hathor.p2p.sync_v2.checkpoints import SyncCheckpoint
 from hathor.p2p.sync_v2.manager import NodeBlockSync
 from hathor.util import Reactor
 
@@ -27,6 +28,14 @@ if TYPE_CHECKING:
 class SyncV2Factory(SyncManagerFactory):
     def __init__(self, connections: ConnectionsManager):
         self.connections = connections
+        self._sync_checkpoints: Optional[SyncCheckpoint] = None
+
+    def get_sync_checkpoints(self) -> SyncCheckpoint:
+        if self._sync_checkpoints is None:
+            assert self.connections.manager is not None
+            # Object that handles the sync until the last checkpoint for all peers
+            self._sync_checkpoints = SyncCheckpoint(self.connections.manager)
+        return self._sync_checkpoints
 
     def create_sync_manager(self, protocol: 'HathorProtocol', reactor: Optional[Reactor] = None) -> SyncManager:
-        return NodeBlockSync(protocol, reactor=reactor)
+        return NodeBlockSync(protocol, sync_checkpoints=self.get_sync_checkpoints(), reactor=reactor)

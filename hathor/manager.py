@@ -1158,8 +1158,7 @@ class HathorManager:
         }
         if tx.is_block:
             message = message_fmt.format('block')
-            if isinstance(tx, Block):
-                kwargs['height'] = tx.get_height()
+            kwargs['height'] = metadata.get_height(soft=True)
         else:
             message = message_fmt.format('tx')
         if not quiet:

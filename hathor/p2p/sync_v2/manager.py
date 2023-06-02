@@ -29,6 +29,7 @@ from zope.interface import implementer
 from hathor.conf import HathorSettings
 from hathor.p2p.messages import ProtocolMessages
 from hathor.p2p.sync_manager import SyncManager
+from hathor.p2p.sync_v2.checkpoints import SyncCheckpoint
 from hathor.p2p.sync_v2.mempool import SyncMempoolManager
 from hathor.transaction import BaseTransaction, Block, Transaction
 from hathor.transaction.base_transaction import tx_or_block_from_bytes
@@ -47,6 +48,7 @@ logger = get_logger()
 class PeerState(Enum):
     ERROR = 'error'
     UNKNOWN = 'unknown'
+    SYNCING_CHECKPOINTS = 'syncing-checkpoints'
     SYNCING_BLOCKS = 'syncing-blocks'
     # XXX: maybe use a SYNCING_MEMPOOL and SYNCING_REALTIME too
 
@@ -75,7 +77,8 @@ class NodeBlockSync(SyncManager):
     """
     name: str = 'node-block-sync'
 
-    def __init__(self, protocol: 'HathorProtocol', reactor: Optional[Reactor] = None) -> None:
+    def __init__(self, protocol: 'HathorProtocol', sync_checkpoints: SyncCheckpoint,
+                 reactor: Optional[Reactor] = None) -> None:
         """
         :param protocol: Protocol of the connection.
         :type protocol: HathorProtocol
@@ -86,6 +89,7 @@ class NodeBlockSync(SyncManager):
         self.protocol = protocol
         self.manager = protocol.node
         self.tx_storage = protocol.node.tx_storage
+        self.sync_checkpoints = sync_checkpoints
         self.state = PeerState.UNKNOWN
 
         if reactor is None:
@@ -143,6 +147,9 @@ class NodeBlockSync(SyncManager):
         self._get_tx_cache: OrderedDict[bytes, BaseTransaction] = OrderedDict()
         self._get_tx_cache_maxsize = 1000
 
+        # This exists to avoid sync-txs loop on sync-checkpoints
+        self._last_sync_transactions_start_hash: Optional[bytes] = None
+
         # Looping call of the main method
         self._lc_run = LoopingCall(self.run_sync)
         self._lc_run.clock = self.reactor
@@ -150,6 +157,10 @@ class NodeBlockSync(SyncManager):
 
         # Whether we propagate transactions or not
         self._is_relaying = False
+
+        # This stores the known height of the block we're currently downloading, we know the height before we can
+        # calculate it because of checkpoints
+        self._blk_height: Optional[int] = None
 
         # This stores the final height that we expect the last "get blocks" stream to end on
         self._blk_end_height: Optional[int] = None
@@ -182,6 +193,10 @@ class NodeBlockSync(SyncManager):
     def disable_sync(self) -> None:
         # TODO
         pass
+
+    def is_syncing_checkpoints(self) -> bool:
+        """True if state is SYNCING_CHECKPOINTS."""
+        return self.state is PeerState.SYNCING_CHECKPOINTS
 
     def send_tx_to_peer_if_possible(self, tx: BaseTransaction) -> None:
         if not self.is_synced():
@@ -247,11 +262,19 @@ class NodeBlockSync(SyncManager):
         """ Override protocols original handle_error so we can recover a sync in progress.
         """
         assert self.protocol.connections is not None
+        if self.sync_checkpoints.is_started() and self.sync_checkpoints.peer_syncing == self:
+            # Oops, we're syncing and we received an error, remove ourselves and let it recover
+            self.sync_checkpoints.peer_syncing = None
+            self.sync_checkpoints.available_peers.pop(self)
         # forward message to overloaded handle_error:
         self.protocol.handle_error(payload)
 
     def update_synced(self, synced: bool) -> None:
         self._synced = synced
+
+    def sync_checkpoints_finished(self) -> None:
+        self.log.info('finished syncing checkpoints')
+        self.state = PeerState.SYNCING_BLOCKS
 
     @inlineCallbacks
     def run_sync(self) -> Generator[Any, Any, None]:
@@ -282,6 +305,7 @@ class NodeBlockSync(SyncManager):
             self.log.debug('running mempool sync, try again later')
             return
 
+        checkpoints = self.manager.checkpoints
         bestblock = self.tx_storage.get_best_block()
         meta = bestblock.get_metadata()
 
@@ -291,7 +315,12 @@ class NodeBlockSync(SyncManager):
         assert self.tx_storage.indexes is not None
         assert self.tx_storage.indexes.deps is not None
 
-        if self.tx_storage.indexes.deps.has_needed_tx():
+        if self.is_syncing_checkpoints():
+            # already syncing checkpoints, nothing to do
+            self.log.debug('already syncing checkpoints', height=meta.height)
+        elif meta.height < checkpoints[-1].height:
+            yield self.start_sync_checkpoints()
+        elif self.tx_storage.indexes.deps.has_needed_tx():
             self.log.debug('needed tx exist, sync transactions')
             self.update_synced(False)
             # TODO: find out whether we can sync transactions from this peer to speed things up
@@ -299,6 +328,19 @@ class NodeBlockSync(SyncManager):
         else:
             # I am already in sync with all checkpoints, sync next blocks
             yield self.run_sync_blocks()
+
+    @inlineCallbacks
+    def start_sync_checkpoints(self) -> Generator[Any, Any, None]:
+        assert self.protocol.connections is not None
+        # Start object to sync until last checkpoint
+        # and request the best block height of the peer
+        self.state = PeerState.SYNCING_CHECKPOINTS
+        self.log.debug('run sync checkpoints')
+        data = yield self.get_peer_best_block()
+        peer_best_height = data['height']
+        self.peer_height = peer_best_height
+        self.sync_checkpoints.update_peer_height(self, peer_best_height)
+        self.sync_checkpoints.start()
 
     def run_sync_transactions(self) -> None:
         from hathor.transaction.genesis import BLOCK_GENESIS
@@ -309,17 +351,29 @@ class NodeBlockSync(SyncManager):
 
         start_hash = self.tx_storage.indexes.deps.get_next_needed_tx()
 
+        if self.is_syncing_checkpoints():
+            if start_hash == self._last_sync_transactions_start_hash:
+                self.log.info('sync transactions looped, skipping', start=start_hash.hex())
+                self.sync_checkpoints.should_skip_sync_tx = True
+                self.sync_checkpoints.continue_sync()
+                return
+            self._last_sync_transactions_start_hash = start_hash
+
         # Start with the last received block and find the best block full validated in its chain
-        block = self._last_received_block
-        if block is None:
-            block = BLOCK_GENESIS
+        if self.is_syncing_checkpoints():
+            block_hash = self._blk_end_hash
+            block_height = self._blk_end_height
         else:
-            with self.tx_storage.allow_partially_validated_context():
-                while not block.get_metadata().validation.is_valid():
-                    block = block.get_block_parent()
-        assert block.hash is not None
-        block_hash = block.hash
-        block_height = block.get_height()
+            block = self._last_received_block
+            if block is None:
+                block = BLOCK_GENESIS
+            else:
+                with self.tx_storage.allow_partially_validated_context():
+                    while not block.get_metadata().validation.is_valid():
+                        block = block.get_block_parent()
+            assert block.hash is not None
+            block_hash = block.hash
+            block_height = block.get_metadata().get_height(soft=True)
 
         self.log.info('run sync transactions', start=start_hash.hex(), end_block_hash=block_hash.hex(),
                       end_block_height=block_height)
@@ -439,11 +493,34 @@ class NodeBlockSync(SyncManager):
         self._blk_end_height = end_height
         self._blk_received = 0
         self._blk_repeated = 0
+        self._blk_height = start_height
         raw_quantity = end_height - start_height + 1
         self._blk_max_quantity = -raw_quantity if reverse else raw_quantity
         self._blk_prev_hash: Optional[bytes] = None
         self._blk_stream_reverse = reverse
         self._last_received_block = None
+
+    def run_sync_between_heights(self, start_hash: bytes, start_height: int, end_hash: bytes, end_height: int) -> None:
+        """Called when the bestblock is between two checkpoints.
+        It must syncs to the left until it reaches a known block.
+
+        We assume that we can trust in `start_hash`.
+
+        Possible cases:
+            o---------------------o
+            o####-----------------o
+
+        Impossible cases:
+            o####-----##----------o
+            o####---------------##o
+
+        TODO Check len(downloads) == h(start) - h(end)
+        """
+        self._setup_block_streaming(start_hash, start_height, end_hash, end_height, True)
+        quantity = start_height - end_height
+        self.log.info('get prev blocks', start_height=start_height, end_height=end_height, quantity=quantity,
+                      start_hash=start_hash.hex(), end_hash=end_hash.hex())
+        self.send_get_prev_blocks(start_hash, end_hash)
 
     def run_block_sync(self, start_hash: bytes, start_height: int, end_hash: bytes, end_height: int) -> None:
         """Called when the bestblock is after all checkpoints.
@@ -494,6 +571,13 @@ class NodeBlockSync(SyncManager):
         not_synced = min(peer_best_height, my_best_height)
         synced = self.synced_height
 
+        if not_synced < synced:
+            self.log.warn('find_best_common_block not_synced < synced', synced=synced, not_synced=not_synced)
+            # not_synced at this moment has the minimum of this node's or the peer's best height. If this is
+            # smaller than the previous synced_height, it means either this node or the peer has switched best
+            # chains. In this case, find the common block from checkpoint.
+            synced = self.manager.checkpoints[-1].height
+
         while not_synced - synced > 1:
             self.log.debug('find_best_common_block synced not_synced', synced=synced, not_synced=not_synced)
             step = math.ceil((not_synced - synced)/10)
@@ -516,6 +600,13 @@ class NodeBlockSync(SyncManager):
                     break
                 else:
                     not_synced = height
+
+            if not_synced == self.synced_height:
+                self.log.warn('find_best_common_block not synced to previous synced height', synced=synced,
+                              not_synced=not_synced)
+                # We're not synced in our previous synced height anymore, so someone changed best chains
+                not_synced = min(peer_best_height, my_best_height)
+                synced = self.manager.checkpoints[-1].height
 
         self.log.debug('find_best_common_block finished synced not_synced', synced=synced, not_synced=not_synced)
         self.synced_height = synced
@@ -628,16 +719,26 @@ class NodeBlockSync(SyncManager):
         self.receiving_stream = False
         assert self.protocol.connections is not None
 
-        if self.state is not PeerState.SYNCING_BLOCKS:
+        if self.state not in [PeerState.SYNCING_BLOCKS, PeerState.SYNCING_CHECKPOINTS]:
             self.log.error('unexpected BLOCKS-END', state=self.state)
             self.protocol.send_error_and_close_connection('Not expecting to receive BLOCKS-END message')
             return
 
         self.log.debug('block streaming ended', reason=str(response_code))
 
+        if self.is_syncing_checkpoints():
+            if self._blk_height == self._blk_end_height:
+                # Tell the checkpoints sync that it's over and can continue
+                self.sync_checkpoints.on_stream_ends()
+            else:
+                self.sync_checkpoints.continue_sync()
+        else:
+            # XXX What should we do if it's in the next block sync phase?
+            return
+
     def handle_blocks(self, payload: str) -> None:
         """Handle a received BLOCK message."""
-        if self.state is not PeerState.SYNCING_BLOCKS:
+        if self.state not in [PeerState.SYNCING_BLOCKS, PeerState.SYNCING_CHECKPOINTS]:
             self.log.error('unexpected BLOCK', state=self.state)
             self.protocol.send_error_and_close_connection('Not expecting to receive BLOCK message')
             return
@@ -657,6 +758,10 @@ class NodeBlockSync(SyncManager):
         if self._blk_received > self._blk_max_quantity + 1:
             self.log.warn('too many blocks received', last_block=blk.hash_hex)
             # Too many blocks. Punish peer?
+            if self.is_syncing_checkpoints():
+                # Tell the checkpoints sync to stop syncing from this peer and ban him
+                self.sync_checkpoints.on_sync_error()
+
             self.state = PeerState.ERROR
             return
 
@@ -682,21 +787,34 @@ class NodeBlockSync(SyncManager):
             # this methods takes care of checking if the block already exists,
             # it will take care of doing at least a basic validation
             # self.log.debug('add new block', block=blk.hash_hex)
+            is_syncing_checkpoints = self.is_syncing_checkpoints()
+            if is_syncing_checkpoints:
+                assert self._blk_height is not None
+                # XXX: maybe improve this, feels a bit hacky
+                blk.storage = self.tx_storage
+                blk.set_soft_height(self._blk_height)
             if self.manager.tx_storage.transaction_exists(blk.hash):
                 # XXX: early terminate?
                 self.log.debug('block early terminate?', blk_id=blk.hash.hex())
             else:
                 self.log.debug('block received', blk_id=blk.hash.hex())
-                self.manager.on_new_tx(blk, propagate_to_peers=False, quiet=True, partial=True)
+                self.manager.on_new_tx(blk, propagate_to_peers=False, quiet=True, partial=True,
+                                       sync_checkpoints=is_syncing_checkpoints)
         except HathorError:
             self.handle_invalid_block(exc_info=True)
             return
         else:
             self._last_received_block = blk
             self._blk_repeated = 0
+            assert self._blk_height is not None
+            if self._blk_stream_reverse:
+                self._blk_height -= 1
+            else:
+                self._blk_height += 1
             # XXX: debugging log, maybe add timing info
             if self._blk_received % 500 == 0:
-                self.log.debug('block streaming in progress', blocks_received=self._blk_received)
+                self.log.debug('block streaming in progress', blocks_received=self._blk_received,
+                               next_height=self._blk_height)
 
     def handle_invalid_block(self, msg: Optional[str] = None, *, exc_info: bool = False) -> None:
         """ Call this method when receiving an invalid block.
@@ -708,6 +826,10 @@ class NodeBlockSync(SyncManager):
             kwargs['exc_info'] = True
         self.log.warn('invalid new block', **kwargs)
         # Invalid block?!
+        if self.is_syncing_checkpoints():
+            # Tell the checkpoints sync to stop syncing from this peer and ban him
+            assert self.protocol.connections is not None
+            self.sync_checkpoints.on_sync_error()
         self.state = PeerState.ERROR
 
     def handle_many_repeated_blocks(self) -> None:
@@ -826,6 +948,11 @@ class NodeBlockSync(SyncManager):
         self._tx_received += 1
         if self._tx_received > self._tx_max_quantity + 1:
             self.log.warn('too many txs received')
+            # Too many blocks. Punish peer?
+            if self.is_syncing_checkpoints():
+                # Tell the checkpoints sync to stop syncing from this peer and ban him
+                self.sync_checkpoints.on_sync_error()
+
             self.state = PeerState.ERROR
             return
 
@@ -833,17 +960,23 @@ class NodeBlockSync(SyncManager):
             # this methods takes care of checking if the tx already exists, it will take care of doing at least
             # a basic validation
             # self.log.debug('add new tx', tx=tx.hash_hex)
+            is_syncing_checkpoints = self.is_syncing_checkpoints()
             if self.manager.tx_storage.transaction_exists(tx.hash):
                 # XXX: early terminate?
                 self.log.debug('tx early terminate?', tx_id=tx.hash.hex())
             else:
                 self.log.debug('tx received', tx_id=tx.hash.hex())
                 self.manager.on_new_tx(tx, propagate_to_peers=False, quiet=True, partial=True,
-                                       reject_locked_reward=True)
+                                       sync_checkpoints=is_syncing_checkpoints,
+                                       reject_locked_reward=not is_syncing_checkpoints)
         except HathorError:
             self.log.warn('invalid new tx', exc_info=True)
             # Invalid block?!
             # Invalid transaction?!
+            if self.is_syncing_checkpoints():
+                assert self.protocol.connections is not None
+                # Tell the checkpoints sync to stop syncing from this peer and ban him
+                self.sync_checkpoints.on_sync_error()
             # Maybe stop syncing and punish peer.
             self.state = PeerState.ERROR
             return
@@ -1149,9 +1282,9 @@ class TransactionsStreaming(_StreamingBase):
 
     def start(self) -> None:
         super().start()
-        last_blk = self.storage.get_transaction(self.last_block_hash)
-        assert isinstance(last_blk, Block)
-        self.last_block_height = last_blk.get_height()
+        last_blk_meta = self.storage.get_metadata(self.last_block_hash)
+        assert last_blk_meta is not None
+        self.last_block_height = last_blk_meta.get_height(soft=True)
 
     # TODO: make this generic too?
     def send_next(self) -> None:
