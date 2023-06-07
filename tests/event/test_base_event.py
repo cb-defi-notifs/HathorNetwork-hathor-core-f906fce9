@@ -43,7 +43,7 @@ def test_create_base_event(event_id, group_id):
             nonce=123,
             timestamp=456,
             version=1,
-            weight=10.0,
+            weight=10,
             inputs=[],
             outputs=[],
             parents=[],
@@ -60,8 +60,8 @@ def test_create_base_event(event_id, group_id):
                 received_by=[],
                 children=[],
                 twins=[],
-                accumulated_weight=10.0,
-                score=20.0,
+                accumulated_weight=10,
+                score=20,
                 height=100,
                 validation='validation'
             )
