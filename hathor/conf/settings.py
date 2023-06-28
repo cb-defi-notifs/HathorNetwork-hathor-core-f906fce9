@@ -343,6 +343,7 @@ class HathorSettings(NamedTuple):
     # Capabilities
     CAPABILITY_WHITELIST: str = 'whitelist'
     CAPABILITY_SYNC_VERSION: str = 'sync-version'
+    CAPABILITY_GET_BEST_BLOCKCHAIN: str = 'get-best-blockchain'
 
     # Where to download whitelist from
     WHITELIST_URL: Optional[str] = None

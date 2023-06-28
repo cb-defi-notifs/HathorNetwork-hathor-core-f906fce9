@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import namedtuple
 from math import inf
 from typing import TYPE_CHECKING, Iterable, Optional
 
 from structlog import get_logger
 from twisted.internet.task import LoopingCall
 
+from hathor.conf import HathorSettings
 from hathor.p2p.messages import ProtocolMessages
 from hathor.p2p.peer_id import PeerId
 from hathor.p2p.states.base import BaseState
@@ -29,6 +31,11 @@ if TYPE_CHECKING:
     from hathor.p2p.protocol import HathorProtocol  # noqa: F401
 
 logger = get_logger()
+
+settings = HathorSettings()
+
+
+BlockInfo = namedtuple("BlockInfo", "hash height weight")
 
 
 class ReadyState(BaseState):
@@ -57,15 +64,28 @@ class ReadyState(BaseState):
         # Minimum round-trip time among PING/PONG.
         self.ping_min_rtt: float = inf
 
+        # The last blocks from the best blockchain in the peer
+        self.best_blockchain: list[BlockInfo] = []
+
         self.cmd_map.update({
             # p2p control messages
             ProtocolMessages.PING: self.handle_ping,
             ProtocolMessages.PONG: self.handle_pong,
             ProtocolMessages.GET_PEERS: self.handle_get_peers,
             ProtocolMessages.PEERS: self.handle_peers,
-
             # Other messages are added by the sync manager.
         })
+
+        # if the peer has the GET-BEST-BLOCKCHAIN capability
+        if settings.CAPABILITY_GET_BEST_BLOCKCHAIN in protocol.capabilities:
+            # set the loop to get the best blockchain from the peer
+            self.lc_get_best_blockchain = LoopingCall(self.send_get_best_blockchain)
+            self.lc_get_best_blockchain.clock = self.reactor
+            self.cmd_map.update({
+                # extend the p2p control messages
+                ProtocolMessages.GET_BEST_BLOCKCHAIN: self.handle_get_best_blockchain,
+                ProtocolMessages.BEST_BLOCKCHAIN: self.handle_best_blockchain,
+            })
 
         # Initialize sync manager and add its commands to the list of available commands.
         connections = self.protocol.connections
@@ -180,3 +200,48 @@ class ReadyState(BaseState):
         self.ping_min_rtt = min(self.ping_min_rtt, self.ping_rtt)
         self.ping_start_time = None
         self.log.debug('rtt updated', rtt=self.ping_rtt, min_rtt=self.ping_min_rtt)
+
+    def send_get_best_blockchain(self, nBlocks: str = '10') -> None:
+        """ Send a GET-BEST-BLOCKCHAIN command, requesting a list of latest
+        N blocks from the best blockchain.
+        """
+        self.send_message(ProtocolMessages.GET_BEST_BLOCKCHAIN, nBlocks)
+
+    def handle_get_best_blockchain(self, payload: str) -> None:
+        """ Executed when a GET-BEST-BLOCKCHAIN command is received.
+        It just responds with a list N blocks from the best blockchain.
+        """
+        nBlocks = int(payload)
+        if not (0 < nBlocks < 101):
+            self.protocol.send_error_and_close_connection('Invalid N to get best blockchain.')
+            return
+
+        best_blockchain: list[BlockInfo] = []
+        tx_storage = self.protocol.node.tx_storage
+        block = tx_storage.get_best_block()
+
+        while len(best_blockchain) < nBlocks:
+            block_info = BlockInfo(
+                block.hash_hex,
+                block.get_height(),
+                block.weight)
+            best_blockchain.append(block_info)
+            # halt if genesis block
+            if block_info.height == 0:
+                break
+            block = block.get_block_parent()
+
+        self.send_best_blockchain(best_blockchain)
+
+    def send_best_blockchain(self, best_blockchain: list[BlockInfo]) -> None:
+        """ Send a BEST-BLOCKCHAIN command with a best blockchain of N blocks.
+        """
+        self.send_message(ProtocolMessages.BEST_BLOCKCHAIN, json_dumps(best_blockchain))
+
+    def handle_best_blockchain(self, payload: str) -> None:
+        """ Executed when a BEST-BLOCKCHAIN command is received. It updates
+        the best blockchain.
+        """
+        restored_blocks = json_loads(payload)
+        best_blockchain = [BlockInfo(*block) for block in restored_blocks]
+        self.best_blockchain = best_blockchain

@@ -90,6 +90,7 @@ class HathorProtocol:
     diff_timestamp: Optional[int]
     idle_timeout: int
     sync_version: Optional[SyncVersion]  # version chosen to be used on this connection
+    capabilities: list[str]  # capabilities received from the peer in HelloState
 
     def __init__(self, network: str, my_peer: PeerId, p2p_manager: 'ConnectionsManager',
                  *, use_ssl: bool, inbound: bool) -> None:

@@ -77,6 +77,12 @@ class ProtocolMessages(Enum):
     # Pong is a response to a PING command.
     PONG = 'PONG'
 
+    # Request a list of blocks from the best blockchain
+    GET_BEST_BLOCKCHAIN = 'GET_BEST_BLOCKCHAIN'
+
+    # Send back the blockchain requested
+    BEST_BLOCKCHAIN = 'BEST_BLOCKCHAIN'
+
     # ---
     # Hathor Specific Messages
     # ---
