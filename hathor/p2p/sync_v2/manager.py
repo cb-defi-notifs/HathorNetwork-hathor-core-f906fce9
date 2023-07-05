@@ -115,6 +115,9 @@ class NodeBlockSync(SyncManager):
         self.blockchain_streaming: Optional[BlockchainStreaming] = None
         self.transactions_streaming: Optional[TransactionsStreaming] = None
 
+        self._pending_download: OrderedDict[VertexId, BlockInfo] = OrderedDict()
+        self._rev_dep: dict[VertexId, set[VertexId]]
+
         # Whether the peers are synced, i.e. our best height and best block are the same
         self._synced = False
 
@@ -280,14 +283,21 @@ class NodeBlockSync(SyncManager):
         """Run sync. This is the entrypoint for the sync.
         It is always safe to call this method.
         """
-        yield self.run_sync_blocks()
-        return
-
         if self.receiving_stream:
             # If we're receiving a stream, wait for it to finish before running sync.
             # If we're sending a stream, do the sync to update the peer's synced block
             self.log.debug('receiving stream, try again later')
             return
+
+        if self._pending_download:
+            import pudb; pudb.set_trace()
+            for vertex_id, requester in self._pending_download.items():
+                self.log.info('run sync transactions', start=vertex_id, requester=requester)
+                self.send_get_block_txs(vertex_id, requester.id)
+                return
+
+        yield self.run_sync_blocks()
+        return
 
         if self.mempool_manager.is_running():
             # It's running a mempool sync, so we wait until it finishes
@@ -302,40 +312,6 @@ class NodeBlockSync(SyncManager):
         assert self.protocol.connections is not None
         assert self.tx_storage.indexes is not None
         assert self.tx_storage.indexes.deps is not None
-
-        if self.tx_storage.indexes.deps.has_needed_tx():
-            self.log.debug('needed tx exist, sync transactions')
-            self.update_synced(False)
-            # TODO: find out whether we can sync transactions from this peer to speed things up
-            self.run_sync_transactions()
-        else:
-            # I am already in sync with all checkpoints, sync next blocks
-            pass
-
-    def run_sync_transactions(self) -> None:
-        self.state = PeerState.SYNCING_TRANSACTIONS
-
-        assert self.protocol.connections is not None
-        assert self.tx_storage.indexes is not None
-        assert self.tx_storage.indexes.deps is not None
-
-        start_hash = self.tx_storage.indexes.deps.get_next_needed_tx()
-
-        # Start with the last received block and find the best block full validated in its chain
-        block = self._last_received_block
-        if block is None:
-            block = cast(Block, self.tx_storage.get_genesis(settings.GENESIS_BLOCK_HASH))
-        else:
-            with self.tx_storage.allow_partially_validated_context():
-                while not block.get_metadata().validation.is_valid():
-                    block = block.get_block_parent()
-        assert block is not None
-        assert block.hash is not None
-        block_height = block.get_height()
-
-        self.log.info('run sync transactions', start=start_hash.hex(), end_block_hash=block.hash.hex(),
-                      end_block_height=block_height)
-        self.send_get_transactions_bfs([start_hash], block.hash)
 
     @inlineCallbacks
     def run_sync_blocks(self) -> Generator[Any, Any, None]:
@@ -400,17 +376,9 @@ class NodeBlockSync(SyncManager):
 
         return
 
-        # if self.synced_height < self.peer_best_height:
-        #     # sync from common block
-        #     peer_block_at_height = yield self.get_peer_block_hashes([self.synced_height])
-        #     self.run_block_sync(peer_block_at_height[0][1], self.synced_height, peer_best_block, peer_best_height)
-        # elif my_height == self.synced_height == self.peer_best_height:
-        #     # we're synced and on the same height, get their mempool
-        #     self.state = PeerState.SYNCING_MEMPOOL
-        #     self.mempool_manager.run()
-        # else:
-        #     # we got all the peer's blocks but aren't on the same height, nothing to do
-        #     pass
+        # we're synced and on the same height, get their mempool
+        self.state = PeerState.SYNCING_MEMPOOL
+        self.mempool_manager.run()
 
     # --------------------------------------------
     # BEGIN: GET_TIPS/TIPS/TIPS_END implementation
@@ -762,7 +730,7 @@ class NodeBlockSync(SyncManager):
                 self.log.debug('block early terminate?', blk_id=blk.hash.hex())
             else:
                 self.log.debug('block received', blk_id=blk.hash.hex())
-                self.on_new_tx(blk, propagate_to_peers=False, quiet=True)
+            self.on_new_tx(blk, propagate_to_peers=False, quiet=True)
         except HathorError:
             self.handle_invalid_block(exc_info=True)
             return
@@ -1181,6 +1149,31 @@ class NodeBlockSync(SyncManager):
                 # in the tx parents even if the tx was invalid (failing the verifications above)
                 # then I would have a children that was not in the storage
                 self.tx_storage.save_transaction(tx)
+
+            self.add_to_deps(tx)
+
             self.manager.log_new_object(tx, 'new {} partially accepted', quiet=quiet)
 
         return True
+
+    def add_to_deps(self, tx: BaseTransaction) -> None:
+        requester: BlockInfo
+        if tx.is_block:
+            assert isinstance(tx, Block)
+            requester = BlockInfo(tx.hash, tx.get_height())
+        else:
+            assert tx.hash in self._pending_download
+            requester = self._pending_download[tx.hash]
+
+        cnt = 0
+        for dep_hash in tx.get_all_dependencies():
+            with self.tx_storage.allow_partially_validated_context():
+                tx_exists = self.tx_storage.transaction_exists(dep_hash)
+            if not tx_exists:
+                if dep_hash not in self._pending_download:
+                    self.log.debug('add to download list', vertex_id=dep_hash.hex(), origin=tx.hash.hex(), requester=requester)
+                    self._pending_download[dep_hash] = requester
+                cnt += 1
+        assert cnt >= 1
+
+        self._pending_download.pop(tx.hash, None)

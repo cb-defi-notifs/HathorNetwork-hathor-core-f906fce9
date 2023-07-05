@@ -231,7 +231,7 @@ class TransactionsStreaming(_StreamingBase):
         assert first_blk_meta is not None
         confirmed_by_height = first_blk_meta.height
         assert confirmed_by_height is not None
-        if confirmed_by_height <= self.last_block_height:
+        if confirmed_by_height < self.last_block_height:
             # got to a tx that is confirmed by the given last-block or an older block
             self.log.debug('tx confirmed by block older than last_block', tx=cur.hash_hex,
                            confirmed_by_height=confirmed_by_height, last_block_height=self.last_block_height)
