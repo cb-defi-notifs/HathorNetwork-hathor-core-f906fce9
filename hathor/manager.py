@@ -595,7 +595,8 @@ class HathorManager:
         # that already has the soft voided transactions marked
         for soft_voided_id in self.consensus_algorithm.soft_voided_tx_ids:
             try:
-                soft_voided_tx = self.tx_storage.get_transaction(soft_voided_id)
+                with self.tx_storage.allow_only_valid_context():
+                    soft_voided_tx = self.tx_storage.get_transaction(soft_voided_id)
             except TransactionDoesNotExist:
                 # This database does not have this tx that should be soft voided
                 # so it's fine, we will mark it as soft voided when we get it through sync
@@ -991,7 +992,7 @@ class HathorManager:
         except HathorError as e:
             if not fails_silently:
                 raise InvalidNewTransaction('consensus update failed') from e
-            self.log.warn('on_new_tx(): consensus update failed', tx=tx.hash_hex)
+            self.log.warn('on_new_tx(): consensus update failed', tx=tx.hash_hex, exc_info=True)
             return False
 
         assert tx.validate_full(skip_block_weight_verification=True, reject_locked_reward=reject_locked_reward)

@@ -608,11 +608,23 @@ class NodeBlockSync(SyncManager):
 
     def send_next_blocks(self, start_hash: bytes, end_hash: bytes) -> None:
         self.log.debug('start GET-NEXT-BLOCKS stream response')
-        # XXX If I don't have this block it will raise TransactionDoesNotExist error. Should I handle this?
-        blk = self.tx_storage.get_transaction(start_hash)
+        try:
+            blk = self.tx_storage.get_transaction(start_hash)
+        except TransactionDoesNotExist:
+            # In case the tx does not exist we send a NOT-FOUND message
+            self.log.debug('requested start_hash not found', start_hash=start_hash.hex())
+            self.send_message(ProtocolMessages.NOT_FOUND, start_hash.hex())
+            return
         assert isinstance(blk, Block)
         assert blk.hash is not None
-        assert not blk.get_metadata().voided_by, f'{blk.hash.hex()}'
+        # XXX: it is not an error for the other peer to request a voided block, we'll pretend it doesn't exist, butf
+        blk_meta = blk.get_metadata()
+        if blk_meta.voided_by:
+            # In case the tx does not exist we send a NOT-FOUND message
+            self.log.debug('requested start_hash is voided', start_hash=start_hash.hex(),
+                           voided_by=[i.hex() for i in blk_meta.voided_by])
+            self.send_message(ProtocolMessages.NOT_FOUND, start_hash.hex())
+            return
         if self.blockchain_streaming is not None and self.blockchain_streaming.is_running:
             self.blockchain_streaming.stop()
         self.blockchain_streaming = BlockchainStreaming(self, blk, end_hash, limit=self.DEFAULT_STREAMING_LIMIT)
@@ -727,7 +739,7 @@ class NodeBlockSync(SyncManager):
                 self.log.debug('block early terminate?', blk_id=blk.hash.hex())
             else:
                 self.log.debug('block received', blk_id=blk.hash.hex())
-                self.on_new_tx(blk, propagate_to_peers=False, quiet=True)
+            self.on_new_tx(blk, propagate_to_peers=False, quiet=True)
         except HathorError:
             self.handle_invalid_block(exc_info=True)
             return
@@ -957,7 +969,7 @@ class NodeBlockSync(SyncManager):
                 self.log.debug('tx early terminate?', tx_id=tx.hash.hex())
             else:
                 self.log.debug('tx received', tx_id=tx.hash.hex())
-                self.on_new_tx(tx, propagate_to_peers=False, quiet=True, reject_locked_reward=True)
+            self.on_new_tx(tx, propagate_to_peers=False, quiet=True, reject_locked_reward=True)
         except HathorError:
             self.log.warn('invalid new tx', exc_info=True)
             # Invalid block?!
@@ -1119,6 +1131,13 @@ class NodeBlockSync(SyncManager):
                   reject_locked_reward: bool = True) -> bool:
 
         assert self.tx_storage.indexes is not None
+        assert tx.hash is not None
+
+        # XXX: "refresh" the transaction so there isn't a duplicate in memory
+        if self.partial_vertex_exists(tx.hash):
+            with self.tx_storage.allow_partially_validated_context():
+                self.tx_storage.compare_bytes_with_local_tx(tx)
+                tx = self.tx_storage.get_transaction(tx.hash)
         assert tx.hash is not None
 
         tx.storage = self.tx_storage

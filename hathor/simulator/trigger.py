@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
+    from hathor.simulator.fake_connection import FakeConnection
     from hathor.simulator.miner import AbstractMiner
     from hathor.simulator.tx_generator import RandomTransactionGenerator
     from hathor.wallet import BaseWallet
@@ -80,3 +81,24 @@ class StopWhenTrue(Trigger):
 
     def should_stop(self) -> bool:
         return self.fn()
+
+
+class StopWhenSynced(Trigger):
+    """Stop the simulation when both agents runnning on a connection report that they have synced."""
+    def __init__(self, connection: 'FakeConnection') -> None:
+        self.connection = connection
+
+    def should_stop(self) -> bool:
+        return self.connection.is_both_synced()
+
+
+class All(Trigger):
+    """Aggregator that returns True when all sub-triggers return True.
+
+    XXX: note that not all sub-triggers will be called, this will short-circuit, in order, if one sub-trigger returns
+    False, which follows the same behavior of builtins.all"""
+    def __init__(self, sub_triggers: list[Trigger]) -> None:
+        self._sub_triggers = sub_triggers
+
+    def should_stop(self) -> bool:
+        return all(trigger.should_stop() for trigger in self._sub_triggers)

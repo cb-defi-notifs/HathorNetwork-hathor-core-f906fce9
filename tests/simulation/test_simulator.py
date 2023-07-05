@@ -1,6 +1,7 @@
 import pytest
 
 from hathor.simulator import FakeConnection
+from hathor.simulator.trigger import All as AllTriggers, StopWhenSynced
 from tests import unittest
 from tests.simulation.base import SimulatorTestCase
 
@@ -64,12 +65,14 @@ class BaseRandomSimulatorTestCase(SimulatorTestCase):
     def test_many_miners_since_beginning(self):
         nodes = []
         miners = []
+        stop_triggers = []
 
         for hashpower in [10e6, 5e6, 1e6, 1e6, 1e6]:
             manager = self.create_peer()
             for node in nodes:
                 conn = FakeConnection(manager, node, latency=0.085)
                 self.simulator.add_connection(conn)
+                stop_triggers.append(StopWhenSynced(conn))
 
             nodes.append(manager)
 
@@ -82,7 +85,7 @@ class BaseRandomSimulatorTestCase(SimulatorTestCase):
         for miner in miners:
             miner.stop()
 
-        self.simulator.run(15)
+        self.assertTrue(self.simulator.run(3600, trigger=AllTriggers(stop_triggers)))
 
         for node in nodes[1:]:
             self.assertTipsEqual(nodes[0], node)
